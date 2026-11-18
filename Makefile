@@ -3,7 +3,7 @@
 all: get build install
 
 get:
-	go get ./...
+	go mod download
 
 build:
 	go build ./...
