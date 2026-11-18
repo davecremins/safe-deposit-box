@@ -3,7 +3,6 @@ module gitlab.com/davecremins/safe-deposit-box
 go 1.22
 
 require (
-	github.com/sirupsen/logrus v1.9.3
 	golang.org/x/crypto v0.31.0
 	golang.org/x/term v0.27.0
 )
