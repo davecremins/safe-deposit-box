@@ -36,6 +36,8 @@ because overwriting files in place is unreliable on SSDs and journaling or copy-
 filesystems.
 
 ## How it works
+See [docs/architecture.md](docs/architecture.md) for diagrams and [docs/argon2id.md](docs/argon2id.md) for background on key derivation.
+
 SDB uses *envelope encryption*, like a bank vault: your passphrase opens the box,
 and the box holds the key that locks your data.
 
