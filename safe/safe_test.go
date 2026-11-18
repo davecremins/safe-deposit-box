@@ -11,11 +11,13 @@ import (
 	"golang.org/x/crypto/chacha20poly1305"
 )
 
+// Shared test fixtures: a passphrase and deliberately cheap KDF settings.
 var (
 	testPass = []byte("a very long and secret passphrase")
 	testOpts = Options{KDF: km.KDFParams{Time: 1, Memory: 8 * 1024, Threads: 1}}
 )
 
+// randBytes returns n cryptographically random bytes, failing the test on error.
 func randBytes(t testing.TB, n int) []byte {
 	t.Helper()
 	b := make([]byte, n)
@@ -25,6 +27,8 @@ func randBytes(t testing.TB, n int) []byte {
 	return b
 }
 
+// encrypt is a test helper that encrypts plaintext with the test passphrase
+// and fast KDF settings, returning the complete SDB file bytes.
 func encrypt(t testing.TB, plaintext []byte) []byte {
 	t.Helper()
 	var out bytes.Buffer
@@ -34,12 +38,15 @@ func encrypt(t testing.TB, plaintext []byte) []byte {
 	return out.Bytes()
 }
 
+// decrypt is a test helper that decrypts an SDB file held in memory.
 func decrypt(ciphertext, pass []byte) ([]byte, error) {
 	var out bytes.Buffer
 	err := Decrypt(&out, bytes.NewReader(ciphertext), pass)
 	return out.Bytes(), err
 }
 
+// TestRoundTripSizes encrypts and decrypts inputs around the chunk boundaries
+// and checks both the recovered plaintext and the exact ciphertext length.
 func TestRoundTripSizes(t *testing.T) {
 	sizes := []int{0, 1, 100, chunkSize - 1, chunkSize, chunkSize + 1, 3 * chunkSize, 3*chunkSize + 17}
 	for _, size := range sizes {
@@ -62,6 +69,8 @@ func TestRoundTripSizes(t *testing.T) {
 	}
 }
 
+// TestDefaultOptionsRoundTrip checks that zero Options select the default
+// Argon2id parameters and still round-trip correctly.
 func TestDefaultOptionsRoundTrip(t *testing.T) {
 	var ct, pt bytes.Buffer
 	if err := Encrypt(&ct, bytes.NewReader([]byte("hi")), testPass, Options{}); err != nil {
@@ -79,6 +88,8 @@ func TestDefaultOptionsRoundTrip(t *testing.T) {
 	}
 }
 
+// TestEncryptionIsRandomised checks that encrypting the same data twice gives
+// different ciphertexts (fresh salt, nonce and data key each time).
 func TestEncryptionIsRandomised(t *testing.T) {
 	msg := []byte("same message")
 	if bytes.Equal(encrypt(t, msg), encrypt(t, msg)) {
@@ -86,6 +97,7 @@ func TestEncryptionIsRandomised(t *testing.T) {
 	}
 }
 
+// TestWrongPassphrase checks that a wrong passphrase is reported as such.
 func TestWrongPassphrase(t *testing.T) {
 	ct := encrypt(t, []byte("secret"))
 	if _, err := decrypt(ct, []byte("wrong")); !errors.Is(err, ErrWrongPassphrase) {
@@ -93,6 +105,8 @@ func TestWrongPassphrase(t *testing.T) {
 	}
 }
 
+// TestEmptyPassphraseRejected checks that empty passphrases are refused for
+// both encryption and decryption.
 func TestEmptyPassphraseRejected(t *testing.T) {
 	err := Encrypt(io.Discard, bytes.NewReader(nil), nil, testOpts)
 	if !errors.Is(err, km.ErrEmptyPassphrase) {
@@ -104,6 +118,8 @@ func TestEmptyPassphraseRejected(t *testing.T) {
 	}
 }
 
+// TestHeaderTamperingDetected flips bits throughout the header and checks that
+// every modification is caught when the data key is unwrapped.
 func TestHeaderTamperingDetected(t *testing.T) {
 	ct := encrypt(t, []byte("secret"))
 	// Skip magic/version/kdf id (checked explicitly) and KDF params, which
@@ -123,6 +139,8 @@ func TestHeaderTamperingDetected(t *testing.T) {
 	}
 }
 
+// TestPayloadTamperingDetected flips bits in the first, a middle and the last
+// chunk and checks that authentication fails.
 func TestPayloadTamperingDetected(t *testing.T) {
 	ct := encrypt(t, randBytes(t, 2*chunkSize+5))
 	for _, i := range []int{headerSize, headerSize + chunkSize, len(ct) - 1} {
@@ -134,6 +152,8 @@ func TestPayloadTamperingDetected(t *testing.T) {
 	}
 }
 
+// TestTruncationDetected cuts the file at various points (inside the header,
+// at a chunk boundary, mid-chunk) and checks the truncation is detected.
 func TestTruncationDetected(t *testing.T) {
 	ct := encrypt(t, randBytes(t, 2*chunkSize+5))
 	cases := map[string]int{
@@ -153,6 +173,8 @@ func TestTruncationDetected(t *testing.T) {
 	}
 }
 
+// TestAppendedDataDetected checks that bytes added after the final chunk are
+// rejected rather than silently ignored.
 func TestAppendedDataDetected(t *testing.T) {
 	ct := encrypt(t, []byte("short"))
 	if _, err := decrypt(append(ct, 0), testPass); !errors.Is(err, ErrCorrupt) {
@@ -160,6 +182,8 @@ func TestAppendedDataDetected(t *testing.T) {
 	}
 }
 
+// TestChunkReorderingDetected swaps two chunks and checks that decryption fails,
+// proving chunk order is authenticated by the nonce counter.
 func TestChunkReorderingDetected(t *testing.T) {
 	ct := encrypt(t, randBytes(t, 3*chunkSize))
 	a := headerSize
@@ -172,6 +196,8 @@ func TestChunkReorderingDetected(t *testing.T) {
 	}
 }
 
+// TestEmptyFinalChunkAfterDataRejected checks that a non-canonical stream (a
+// full chunk followed by an empty final chunk) is refused.
 func TestEmptyFinalChunkAfterDataRejected(t *testing.T) {
 	// Hand-craft a stream with a full non-final chunk followed by an empty
 	// final chunk; valid encryptors never produce this.
@@ -191,6 +217,7 @@ func TestEmptyFinalChunkAfterDataRejected(t *testing.T) {
 	}
 }
 
+// TestNotSDB checks that empty and non-SDB inputs are identified as such.
 func TestNotSDB(t *testing.T) {
 	for _, in := range [][]byte{nil, []byte("S"), []byte("hello world, not encrypted")} {
 		if _, err := decrypt(in, testPass); !errors.Is(err, ErrNotSDB) {
@@ -199,6 +226,8 @@ func TestNotSDB(t *testing.T) {
 	}
 }
 
+// TestUnsupportedVersionAndKDF checks that unknown format versions and KDF
+// identifiers are refused.
 func TestUnsupportedVersionAndKDF(t *testing.T) {
 	ct := encrypt(t, []byte("x"))
 	v := bytes.Clone(ct)
@@ -213,6 +242,8 @@ func TestUnsupportedVersionAndKDF(t *testing.T) {
 	}
 }
 
+// TestHostileKDFParamsRejected checks that a header demanding an excessive
+// amount of Argon2id memory is refused before any key derivation runs.
 func TestHostileKDFParamsRejected(t *testing.T) {
 	ct := encrypt(t, []byte("x"))
 	ct[9] = 0xff // memory cost far above the cap
@@ -221,6 +252,8 @@ func TestHostileKDFParamsRejected(t *testing.T) {
 	}
 }
 
+// TestNonceCounter checks counter increment, carry propagation, overflow
+// detection and the final-chunk flag.
 func TestNonceCounter(t *testing.T) {
 	var n nonce
 	if err := n.next(); err != nil || n[counterSize-1] != 1 {
@@ -243,8 +276,10 @@ func TestNonceCounter(t *testing.T) {
 	}
 }
 
+// failWriter is an io.Writer that succeeds `after` times and then fails.
 type failWriter struct{ after int }
 
+// Write counts down successful writes and fails once the budget is spent.
 func (w *failWriter) Write(p []byte) (int, error) {
 	if w.after <= 0 {
 		return 0, errors.New("write failed")
@@ -253,10 +288,14 @@ func (w *failWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// failReader is an io.Reader whose every Read fails.
 type failReader struct{}
 
+// Read always returns an error.
 func (failReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
 
+// TestIOErrorsPropagate checks that read and write errors at every stage of
+// encryption and decryption are returned to the caller.
 func TestIOErrorsPropagate(t *testing.T) {
 	if err := Encrypt(&failWriter{0}, bytes.NewReader(nil), testPass, testOpts); err == nil {
 		t.Error("expected header write error")
@@ -280,7 +319,8 @@ func TestIOErrorsPropagate(t *testing.T) {
 	}
 }
 
-// Peek errors other than EOF must surface rather than be treated as the end.
+// TestReadErrorAfterFullChunk checks that a read error discovered while
+// peeking past a full chunk is returned rather than treated as end of input.
 func TestReadErrorAfterFullChunk(t *testing.T) {
 	src := io.MultiReader(bytes.NewReader(make([]byte, chunkSize)), failReader{})
 	if err := Encrypt(io.Discard, src, testPass, testOpts); err == nil {
@@ -288,6 +328,8 @@ func TestReadErrorAfterFullChunk(t *testing.T) {
 	}
 }
 
+// BenchmarkEncryptStream measures payload encryption throughput on 16 MiB of
+// data (key derivation excluded). Run with "make bench".
 func BenchmarkEncryptStream(b *testing.B) {
 	data := randBytes(b, 16*1024*1024)
 	aead, _ := chacha20poly1305.New(randBytes(b, dataKeySize))

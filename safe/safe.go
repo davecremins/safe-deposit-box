@@ -36,18 +36,23 @@ type Options struct {
 	KDF km.KDFParams
 }
 
-// Encrypt reads plaintext from src and writes an SDB file to dst.
+// Encrypt reads plaintext from src and writes an SDB file to dst: a header
+// holding the passphrase-wrapped data key, followed by the payload encrypted
+// in authenticated chunks. Input of any size is processed in constant memory.
 func Encrypt(dst io.Writer, src io.Reader, passphrase []byte, opts Options) error {
+	// Fall back to the recommended Argon2id costs unless overridden.
 	params := opts.KDF
 	if params == (km.KDFParams{}) {
 		params = km.DefaultKDFParams
 	}
+	// Generate the per-file data key and wrap it under the passphrase.
 	h, dataKey, err := newHeader(passphrase, params)
 	if err != nil {
 		return err
 	}
 	defer km.Wipe(dataKey)
 
+	// Write the header, then stream the payload encrypted with the data key.
 	aead, err := chacha20poly1305.New(dataKey)
 	if err != nil {
 		return err
@@ -64,6 +69,7 @@ func Encrypt(dst io.Writer, src io.Reader, passphrase []byte, opts Options) erro
 // error is returned, data already written to dst must be discarded because
 // the remainder of the stream could not be verified.
 func Decrypt(dst io.Writer, src io.Reader, passphrase []byte) error {
+	// Parse the header and recover the data key with the passphrase.
 	h, err := readHeader(src)
 	if err != nil {
 		return err
@@ -74,6 +80,7 @@ func Decrypt(dst io.Writer, src io.Reader, passphrase []byte) error {
 	}
 	defer km.Wipe(dataKey)
 
+	// Authenticate and decrypt the payload chunk by chunk.
 	aead, err := chacha20poly1305.New(dataKey)
 	if err != nil {
 		return err

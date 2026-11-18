@@ -8,6 +8,8 @@ import (
 // fastParams keeps tests quick while staying within the validated bounds.
 var fastParams = KDFParams{Time: 1, Memory: minMemory, Threads: 1}
 
+// TestDeriveKeyIsDeterministic checks that the same passphrase and salt always
+// yield the same 32-byte key (required for decryption to work).
 func TestDeriveKeyIsDeterministic(t *testing.T) {
 	salt, err := NewSalt()
 	if err != nil {
@@ -26,6 +28,8 @@ func TestDeriveKeyIsDeterministic(t *testing.T) {
 	}
 }
 
+// TestDeriveKeyDependsOnPassphraseAndSalt checks that changing either the
+// passphrase or the salt changes the derived key.
 func TestDeriveKeyDependsOnPassphraseAndSalt(t *testing.T) {
 	salt1, _ := NewSalt()
 	salt2, _ := NewSalt()
@@ -40,6 +44,8 @@ func TestDeriveKeyDependsOnPassphraseAndSalt(t *testing.T) {
 	}
 }
 
+// TestDeriveKeyRejectsBadInput checks that empty passphrases, wrong-length
+// salts and out-of-range cost parameters are refused.
 func TestDeriveKeyRejectsBadInput(t *testing.T) {
 	salt, _ := NewSalt()
 	cases := map[string]struct {
@@ -63,12 +69,14 @@ func TestDeriveKeyRejectsBadInput(t *testing.T) {
 	}
 }
 
+// TestDefaultParamsAreValid checks the shipped defaults pass validation.
 func TestDefaultParamsAreValid(t *testing.T) {
 	if err := DefaultKDFParams.Validate(); err != nil {
 		t.Error(err)
 	}
 }
 
+// TestWipe checks that Wipe zeroes every byte of a buffer.
 func TestWipe(t *testing.T) {
 	b := []byte{1, 2, 3}
 	Wipe(b)

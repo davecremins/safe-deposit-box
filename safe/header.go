@@ -27,25 +27,35 @@ import (
 // Bytes [0, 54) are the additional authenticated data of the key wrap, so
 // any modification of the header makes unwrapping fail.
 const (
-	magic          = "SDB"
-	formatVersion  = 1
-	kdfArgon2id    = 1
-	dataKeySize    = chacha20poly1305.KeySize
-	wrapNonceSize  = chacha20poly1305.NonceSizeX
-	wrappedKeySize = dataKeySize + chacha20poly1305.Overhead
-	aadSize        = 3 + 1 + 1 + 4 + 4 + 1 + km.SaltSize + wrapNonceSize
-	headerSize     = aadSize + wrappedKeySize
+	magic          = "SDB"                                               // identifies SDB files
+	formatVersion  = 1                                                   // bumped on incompatible changes
+	kdfArgon2id    = 1                                                   // KDF identifier for Argon2id
+	dataKeySize    = chacha20poly1305.KeySize                            // 32-byte per-file data key
+	wrapNonceSize  = chacha20poly1305.NonceSizeX                         // 24-byte XChaCha20 nonce
+	wrappedKeySize = dataKeySize + chacha20poly1305.Overhead             // encrypted key + 16-byte tag
+	aadSize        = 3 + 1 + 1 + 4 + 4 + 1 + km.SaltSize + wrapNonceSize // authenticated prefix
+	headerSize     = aadSize + wrappedKeySize                            // 102 bytes in total
 )
 
+// header is the in-memory form of the file header. It holds everything
+// needed to recover the data key from a passphrase; none of it is secret
+// without the passphrase.
 type header struct {
-	kdf        km.KDFParams
-	salt       []byte
-	wrapNonce  []byte
-	wrappedKey []byte
+	kdf        km.KDFParams // Argon2id cost parameters used for this file
+	salt       []byte       // random Argon2id salt, unique per file
+	wrapNonce  []byte       // random nonce used to wrap the data key
+	wrappedKey []byte       // data key encrypted under the passphrase key
 }
 
-// newHeader generates a fresh data key and wraps it under a key derived
-// from passphrase. The caller owns (and should wipe) the returned data key.
+// newHeader creates the header for a new file:
+//
+//  1. pick a random salt, wrap nonce and 256-bit data key;
+//  2. derive the key-encryption key (KEK) from the passphrase with Argon2id;
+//  3. encrypt ("wrap") the data key with the KEK using XChaCha20-Poly1305,
+//     authenticating the rest of the header as associated data.
+//
+// It returns the header and the plaintext data key, which the caller uses
+// to encrypt the payload and should wipe afterwards. The KEK is wiped here.
 func newHeader(passphrase []byte, params km.KDFParams) (*header, []byte, error) {
 	salt, err := km.NewSalt()
 	if err != nil {
@@ -73,7 +83,9 @@ func newHeader(passphrase []byte, params km.KDFParams) (*header, []byte, error) 
 	return h, dataKey, nil
 }
 
-// aad serialises the authenticated (non-secret) part of the header.
+// aad serialises the header fields that precede the wrapped key, i.e. the
+// first 54 bytes of the file. They are used as associated data when the data
+// key is wrapped, so changing any of them makes unwrapping fail.
 func (h *header) aad() []byte {
 	var b bytes.Buffer
 	b.Grow(aadSize)
@@ -88,10 +100,16 @@ func (h *header) aad() []byte {
 	return b.Bytes()
 }
 
+// marshal returns the complete 102-byte on-disk header.
 func (h *header) marshal() []byte {
 	return append(h.aad(), h.wrappedKey...)
 }
 
+// readHeader reads and parses the 102-byte header from r. It checks the
+// magic bytes, format version and KDF identifier, and rejects out-of-range
+// Argon2id parameters before any expensive key derivation is attempted, so a
+// crafted file cannot make the tool allocate huge amounts of memory. It does
+// not need the passphrase; authenticity is checked later by unwrap.
 func readHeader(r io.Reader) (*header, error) {
 	buf := make([]byte, headerSize)
 	n, err := io.ReadFull(r, buf)
@@ -131,7 +149,10 @@ func readHeader(r io.Reader) (*header, error) {
 	return h, nil
 }
 
-// unwrap derives the key-encryption key and recovers the data key.
+// unwrap re-derives the key-encryption key from passphrase using the salt
+// and parameters stored in the header, then decrypts the data key. A wrong
+// passphrase and a modified header are indistinguishable by design: both
+// fail authentication and return ErrWrongPassphrase.
 func (h *header) unwrap(passphrase []byte) ([]byte, error) {
 	kek, err := km.DeriveKey(passphrase, h.salt, h.kdf)
 	if err != nil {

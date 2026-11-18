@@ -1,3 +1,6 @@
+// Package keymgt provides key management primitives: turning a passphrase
+// into a cryptographic key with Argon2id, generating salts, and wiping key
+// material from memory. See docs/argon2id.md for background.
 package keymgt
 
 import (
@@ -38,7 +41,9 @@ var DefaultKDFParams = KDFParams{Time: 3, Memory: 64 * 1024, Threads: 4}
 // ErrEmptyPassphrase is returned when an empty passphrase is supplied.
 var ErrEmptyPassphrase = errors.New("passphrase must not be empty")
 
-// Validate checks the parameters are within sane bounds.
+// Validate checks the parameters are within sane bounds: at least the
+// minimum needed for meaningful protection, and at most the caps that stop a
+// malicious file header from exhausting memory or CPU.
 func (p KDFParams) Validate() error {
 	switch {
 	case p.Time < 1 || p.Time > maxTime:
@@ -61,6 +66,11 @@ func NewSalt() ([]byte, error) {
 }
 
 // DeriveKey stretches a passphrase into a 256-bit key using Argon2id.
+//
+// The same passphrase, salt and parameters always produce the same key, which
+// is how decryption re-creates the key used at encryption time. The salt
+// makes every file's key unique even when passphrases are reused, and the
+// memory-hard cost makes each guess expensive for an attacker.
 func DeriveKey(passphrase, salt []byte, p KDFParams) ([]byte, error) {
 	if len(passphrase) == 0 {
 		return nil, ErrEmptyPassphrase
