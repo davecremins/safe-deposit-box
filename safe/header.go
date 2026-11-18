@@ -65,11 +65,6 @@ func newHeader(passphrase []byte, params km.KDFParams) (*header, []byte, error) 
 	if _, err := io.ReadFull(rand.Reader, h.wrapNonce); err != nil {
 		return nil, nil, err
 	}
-	dataKey := make([]byte, dataKeySize)
-	if _, err := io.ReadFull(rand.Reader, dataKey); err != nil {
-		return nil, nil, err
-	}
-
 	kek, err := km.DeriveKey(passphrase, salt, params)
 	if err != nil {
 		return nil, nil, err
@@ -77,6 +72,12 @@ func newHeader(passphrase []byte, params km.KDFParams) (*header, []byte, error) 
 	defer km.Wipe(kek)
 	aead, err := chacha20poly1305.NewX(kek)
 	if err != nil {
+		return nil, nil, err
+	}
+
+	// Generate the data key last, so no error path can leave it unwiped.
+	dataKey := make([]byte, dataKeySize)
+	if _, err := io.ReadFull(rand.Reader, dataKey); err != nil {
 		return nil, nil, err
 	}
 	h.wrappedKey = aead.Seal(nil, h.wrapNonce, dataKey, h.aad())
