@@ -1,10 +1,11 @@
 package main
 
 import (
+	"os"
+
 	"gitlab.com/davecremins/safe-deposit-box/apps"
 )
 
 func main() {
-	app := apps.CLI{}
-	app.Run()
+	os.Exit(apps.NewCLI().Run(os.Args[1:]))
 }
